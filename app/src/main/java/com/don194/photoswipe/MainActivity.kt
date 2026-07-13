@@ -154,6 +154,7 @@ private fun PhotoSwipeApp() {
     var deleteCandidates by remember { mutableStateOf<List<PhotoItem>>(emptyList()) }
     var history by remember { mutableStateOf<List<SwipeHistory>>(emptyList()) }
     var showExitDialog by remember { mutableStateOf(false) }
+    var showDiscardDeleteDialog by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<List<PhotoItem>>(emptyList()) }
     var deleteResult by remember { mutableStateOf<DeleteResult?>(null) }
     var hideKeptPhotos by remember { mutableStateOf(preferences.hideKeptPhotos) }
@@ -301,7 +302,7 @@ private fun PhotoSwipeApp() {
     }
 
     BackHandler(
-        enabled = !showExitDialog && screen != AppScreen.Home && screen != AppScreen.PermissionIntro
+        enabled = !showExitDialog && !showDiscardDeleteDialog && screen != AppScreen.Home && screen != AppScreen.PermissionIntro
     ) {
         // 返回键在当前流程内导航；正在进行滑动整理时先请求确认，
         // 因为当前会话中可能包含尚未执行的删除决定。
@@ -426,7 +427,7 @@ private fun PhotoSwipeApp() {
                     },
                     onRemoveCandidate = { photo -> deleteCandidates = deleteCandidates.filterNot { it.id == photo.id } },
                     onDelete = requestDelete,
-                    onCancel = { screen = AppScreen.Home }
+                    onCancel = { showDiscardDeleteDialog = true }
                 )
             }
             AppScreen.Result -> DeleteResultScreen(
@@ -444,6 +445,32 @@ private fun PhotoSwipeApp() {
                 text = { Text(stringResource(R.string.exit_session_message)) },
                 confirmButton = { TextButton(onClick = { showExitDialog = false; screen = AppScreen.Home }) { Text(stringResource(R.string.exit)) } },
                 dismissButton = { TextButton(onClick = { showExitDialog = false }) { Text(stringResource(R.string.continue_sorting)) } }
+            )
+        }
+
+        if (showDiscardDeleteDialog) {
+            AlertDialog(
+                onDismissRequest = { showDiscardDeleteDialog = false },
+                title = { Text(stringResource(R.string.discard_delete_title)) },
+                text = { Text(stringResource(R.string.discard_delete_message)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDiscardDeleteDialog = false
+                        deleteCandidates = emptyList()
+                        history = emptyList()
+                        photos = emptyList()
+                        currentIndex = 0
+                        selectedAlbum = null
+                        screen = AppScreen.Home
+                    }) {
+                        Text(stringResource(R.string.back_home))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDiscardDeleteDialog = false }) {
+                        Text(stringResource(R.string.continue_deleting))
+                    }
+                }
             )
         }
     }
@@ -1198,7 +1225,12 @@ private fun ReviewDeleteScreen(album: PhotoAlbum, candidates: List<PhotoItem>, o
             }
             Spacer(Modifier.height(14.dp))
             Button(onClick = onDelete, modifier = Modifier.fillMaxWidth(), enabled = candidates.isNotEmpty(), contentPadding = PaddingValues(vertical = 16.dp)) { Text(stringResource(R.string.confirm_delete, candidates.size)) }
-            TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.back_home)) }
+            TextButton(
+                onClick = onCancel,
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            ) {
+                Text(stringResource(R.string.back_home))
+            }
         }
     }
     selectedPhoto?.let { photo ->

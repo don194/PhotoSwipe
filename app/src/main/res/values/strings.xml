@@ -61,6 +61,9 @@
     <string name="review_message">These photos have not been deleted yet. Android will show a deletion confirmation after you tap confirm.</string>
     <string name="confirm_delete">Confirm deletion of %1$d</string>
     <string name="back_home">Back to home</string>
+    <string name="discard_delete_title">Abandon deletion and return home?</string>
+    <string name="discard_delete_message">The selected photos have not been deleted. Returning home will clear this deletion list.</string>
+    <string name="continue_deleting">Continue deletion</string>
     <string name="no_photos_selected">No photos selected</string>
     <string name="no_photos_selected_message">No photos from “%1$s” were added to the deletion list.</string>
     <string name="remove">Remove</string>
