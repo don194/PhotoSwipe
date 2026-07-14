@@ -2,6 +2,7 @@ package com.don194.photoswipe
 
 import android.Manifest
 import android.app.Activity
+import android.app.RecoverableSecurityException
 import android.content.Context
 import android.content.IntentSender
 import android.content.pm.PackageManager
@@ -134,6 +135,11 @@ private data class SwipeHistory(
     val addedToKeptHistory: Boolean = false
 )
 private data class DeleteResult(val status: DeleteStatus, val deletedCount: Int, val remainingCount: Int)
+private data class LegacyDeleteOperation(
+    val photos: List<PhotoItem>,
+    val nextIndex: Int,
+    val deletedPhotos: List<PhotoItem>
+)
 
 @Composable
 private fun PhotoSwipeApp() {
@@ -156,6 +162,10 @@ private fun PhotoSwipeApp() {
     var showExitDialog by remember { mutableStateOf(false) }
     var showDiscardDeleteDialog by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<List<PhotoItem>>(emptyList()) }
+    var pendingLegacyDelete by remember { mutableStateOf<LegacyDeleteOperation?>(null) }
+    var resumeLegacyDelete: ((LegacyDeleteOperation) -> Unit)? = null
+    var finishLegacyDeleteOperation: ((List<PhotoItem>, List<PhotoItem>, Boolean) -> Unit)? = null
+    var launchLegacyDeleteConfirmation: ((IntentSender) -> Unit)? = null
     var deleteResult by remember { mutableStateOf<DeleteResult?>(null) }
     var hideKeptPhotos by remember { mutableStateOf(preferences.hideKeptPhotos) }
     var keptPhotoDays by remember { mutableIntStateOf(preferences.keptPhotoDays) }
@@ -225,6 +235,20 @@ private fun PhotoSwipeApp() {
     }
 
     fun finishDeleteRequest(resultCode: Int) {
+        val legacyOperation = pendingLegacyDelete
+        if (legacyOperation != null) {
+            pendingLegacyDelete = null
+            if (resultCode == Activity.RESULT_OK) {
+                checkNotNull(resumeLegacyDelete).invoke(legacyOperation)
+            } else {
+                checkNotNull(finishLegacyDeleteOperation).invoke(
+                    legacyOperation.photos,
+                    legacyOperation.deletedPhotos,
+                    true
+                )
+            }
+            return
+        }
         val requested = pendingDelete
         pendingDelete = emptyList()
         if (resultCode != Activity.RESULT_OK) {
@@ -251,10 +275,65 @@ private fun PhotoSwipeApp() {
         }
     }
 
+    fun finishLegacyDelete(
+        requested: List<PhotoItem>,
+        deletedPhotos: List<PhotoItem>,
+        cancelled: Boolean = false
+    ) {
+        pendingDelete = emptyList()
+        recordCleanup(deletedPhotos)
+        val remaining = requested.size - deletedPhotos.size
+        deleteResult = when {
+            cancelled && deletedPhotos.isEmpty() -> DeleteResult(DeleteStatus.Cancelled, 0, requested.size)
+            remaining == 0 -> DeleteResult(DeleteStatus.Success, deletedPhotos.size, 0)
+            deletedPhotos.isEmpty() -> DeleteResult(DeleteStatus.Failed, 0, remaining)
+            else -> DeleteResult(DeleteStatus.Partial, deletedPhotos.size, remaining)
+        }
+        screen = AppScreen.Result
+    }
+
+    fun continueLegacyDelete(operation: LegacyDeleteOperation) {
+        scope.launch {
+            val deletedPhotos = operation.deletedPhotos.toMutableList()
+            var index = operation.nextIndex
+            while (index < operation.photos.size) {
+                val photo = operation.photos[index]
+                try {
+                    if (context.contentResolver.delete(photo.uri, null, null) > 0) {
+                        deletedPhotos += photo
+                    }
+                } catch (exception: RecoverableSecurityException) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        pendingLegacyDelete = LegacyDeleteOperation(
+                            photos = operation.photos,
+                            nextIndex = index,
+                            deletedPhotos = deletedPhotos
+                        )
+                        checkNotNull(launchLegacyDeleteConfirmation).invoke(
+                            exception.userAction.actionIntent.intentSender
+                        )
+                        return@launch
+                    }
+                } catch (_: SecurityException) {
+                    // Android 9 及更早版本由 WRITE_EXTERNAL_STORAGE 授权；无权文件保留在结果中。
+                }
+                index++
+            }
+            finishLegacyDelete(operation.photos, deletedPhotos)
+        }
+    }
+
     val deleteLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartIntentSenderForResult(),
         onResult = { finishDeleteRequest(it.resultCode) }
     )
+    resumeLegacyDelete = ::continueLegacyDelete
+    finishLegacyDeleteOperation = { requested, deletedPhotos, cancelled ->
+        finishLegacyDelete(requested, deletedPhotos, cancelled)
+    }
+    launchLegacyDeleteConfirmation = { intentSender ->
+        deleteLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
+    }
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
         onResult = { refreshLibrary(AppScreen.Home) }
@@ -274,30 +353,8 @@ private fun PhotoSwipeApp() {
                 screen = AppScreen.Result
             }
         } else {
-            scope.launch {
-                val deletedPhotos = mutableListOf<PhotoItem>()
-                // 较早版本的 Android 没有 createDeleteRequest，
-                // 因此逐个删除 URI，并将失败情况报告为部分成功。
-                pendingDelete.forEach { photo ->
-                    try {
-                        if (context.contentResolver.delete(photo.uri, null, null) > 0) {
-                            deletedPhotos += photo
-                        }
-                    } catch (_: SecurityException) {
-                        // 下面的结果状态会报告系统无法删除的照片。
-                    }
-                }
-                val deleted = deletedPhotos.size
-                val remaining = pendingDelete.size - deleted
-                pendingDelete = emptyList()
-                recordCleanup(deletedPhotos)
-                deleteResult = when {
-                    remaining == 0 -> DeleteResult(DeleteStatus.Success, deleted, 0)
-                    deleted == 0 -> DeleteResult(DeleteStatus.Failed, 0, remaining)
-                    else -> DeleteResult(DeleteStatus.Partial, deleted, remaining)
-                }
-                screen = AppScreen.Result
-            }
+            // Android 10 对其他应用创建的媒体会要求逐项确认，确认后继续删除队列。
+            continueLegacyDelete(LegacyDeleteOperation(pendingDelete, 0, emptyList()))
         }
     }
 
@@ -1553,7 +1610,8 @@ private fun photoPermissions(): Array<String> = when {
     // Android 14 可能授予全部图片访问权限，也可能只授予用户选择的媒体权限。
     Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
     Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
-    else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE)
 }
 
 private fun hasPhotoAccess(context: Context): Boolean = when {
