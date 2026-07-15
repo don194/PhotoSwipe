@@ -8,11 +8,16 @@ When I changed phones during the 618 shopping festival, I found more than ten th
 
 PhotoSwipe was created for this reason: it is inspired by the card-based left and right swipes used in dating apps. Swipe left to mark a photo for deletion, swipe right to keep it, and pinch to zoom in on long screenshots. Review the selection and confirm the deletion at the end to make screenshot cleanup easier.
 
+## Local-only processing
+
+PhotoSwipe reads and organizes photos stored on your device. It does not connect to the internet, require sign-in, or upload photos or usage data. Android displays the final deletion confirmation, so no photo is deleted before you approve it.
+
 ## Core features
 
 - Mainly designed for cleaning up screenshots, but it can also organize local photos by album.
 - Swipe left to mark a photo for deletion, swipe right to keep it, and undo when needed.
 - Drag and zoom to inspect photo details.
+- All photo processing happens locally on your device.
 
 ## Download
 
